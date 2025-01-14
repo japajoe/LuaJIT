@@ -21,6 +21,7 @@ jobs:
     - name: Build the project on MacOS
       run: |
         echo "Building project on MacOS ${{ matrix.arch }}"
+        export MACOSX_DEPLOYMENT_TARGET=10.15
         make
 
     - name: Upload build artifacts
