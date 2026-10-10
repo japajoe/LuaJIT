@@ -8,6 +8,8 @@ on:
 jobs:
   # ============================================================
   # POSIX native builds (Linux x64, macOS x64/arm64)
+  # macOS requires MACOSX_DEPLOYMENT_TARGET per the docs:
+  #   MACOSX_DEPLOYMENT_TARGET=XX.YY make
   # ============================================================
   build-posix-native:
     strategy:
@@ -16,10 +18,13 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-x64
+            deployment_target: ""
           - os: macos-13          # Intel runner
             target: osx-x64
+            deployment_target: "11.0"
           - os: macos-latest      # ARM runner
             target: osx-arm64
+            deployment_target: "11.0"
 
     runs-on: ${{ matrix.os }}
 
@@ -31,6 +36,8 @@ jobs:
           cd src
           make
         shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
 
       - name: Collect artifacts
         run: |
@@ -155,7 +162,7 @@ jobs:
   # ============================================================
   # iOS build (interpreter only)
   # JIT is disabled on iOS because regular iOS apps are not
-  # allowed to generate code at runtime. [citation:1]
+  # allowed to generate code at runtime.
   # ============================================================
   build-ios:
     runs-on: macos-latest
@@ -191,7 +198,7 @@ jobs:
   # ============================================================
   # Windows builds using MSVC
   # Run msvcbuild.bat from a Native Tools Command Prompt
-  # for the appropriate target architecture. [citation:5]
+  # for the appropriate target architecture.
   # ============================================================
   build-windows:
     strategy:
