@@ -1,31 +1,239 @@
-name: Build for MacOS, Linux, and Windows
+name: Build LuaJIT
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
-  build-macos:
-    runs-on: macos-latest
+  # ============================================================
+  # POSIX native builds (Linux x64, macOS x64/arm64)
+  # ============================================================
+  build-posix-native:
     strategy:
+      fail-fast: false
       matrix:
-        arch: [arm64, x86_64]  # Mac architectures: ARM and Intel
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-13          # Intel runner
+            target: osx-x64
+          - os: macos-latest      # ARM runner
+            target: osx-arm64
+
+    runs-on: ${{ matrix.os }}
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
-    - name: Set up dependencies on MacOS
-      run: |
-        echo "Setting up dependencies on MacOS ${{ matrix.arch }}"
-        brew install cmake
+      - name: Build LuaJIT
+        run: |
+          cd src
+          make
+        shell: bash
 
-    - name: Build the project on MacOS
-      run: |
-        echo "Building project on MacOS ${{ matrix.arch }}"
-        export MACOSX_DEPLOYMENT_TARGET=10.15
-        make
+      - name: Collect artifacts
+        run: |
+          mkdir -p output/bin output/lib output/include output/share
+          cp src/luajit output/bin/ 2>/dev/null || true
+          cp src/libluajit*.so* output/lib/ 2>/dev/null || true
+          cp src/libluajit*.dylib output/lib/ 2>/dev/null || true
+          cp src/luajit.h output/include/ 2>/dev/null || true
+          cp -r src/jit output/share/ 2>/dev/null || true
+          ls -R output
+        shell: bash
 
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: build-macos-${{ matrix.arch }}
-        path: ./
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luajit-${{ matrix.target }}
+          path: output/
+          if-no-files-found: warn
+
+  # ============================================================
+  # Linux ARM cross-compilation
+  # Requires HOST_CC to match target pointer size.
+  # For 32-bit ARM: HOST_CC="gcc -m32"
+  # ============================================================
+  build-linux-arm:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-arm64
+            cross: aarch64-linux-gnu-
+            host_cc: gcc
+            packages: gcc-aarch64-linux-gnu
+          - target: linux-arm
+            cross: arm-linux-gnueabihf-
+            host_cc: "gcc -m32"
+            packages: "gcc-arm-linux-gnueabihf gcc-multilib"
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+
+      - name: Build LuaJIT
+        run: |
+          cd src
+          make HOST_CC="${{ matrix.host_cc }}" CROSS=${{ matrix.cross }}
+        shell: bash
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p output/lib output/include output/share
+          cp src/libluajit*.a output/lib/ 2>/dev/null || true
+          cp src/luajit.h output/include/ 2>/dev/null || true
+          cp -r src/jit output/share/ 2>/dev/null || true
+          ls -R output
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luajit-${{ matrix.target }}
+          path: output/
+          if-no-files-found: warn
+
+  # ============================================================
+  # Android cross-compilation using NDK
+  # ============================================================
+  build-android:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: android-arm64
+            ndk_cross: aarch64-linux-android-
+            ndk_cc: aarch64-linux-android21-clang
+          - target: android-arm
+            ndk_cross: arm-linux-androideabi-
+            ndk_cc: armv7a-linux-androideabi21-clang
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25b
+
+      - name: Build LuaJIT for Android
+        run: |
+          cd src
+          NDKBIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          make \
+            CROSS="$NDKBIN/${{ matrix.ndk_cross }}" \
+            STATIC_CC="$NDKBIN/${{ matrix.ndk_cc }}" \
+            DYNAMIC_CC="$NDKBIN/${{ matrix.ndk_cc }} -fPIC" \
+            TARGET_LD="$NDKBIN/${{ matrix.ndk_cc }}" \
+            TARGET_AR="$NDKBIN/llvm-ar rcus" \
+            TARGET_STRIP="$NDKBIN/llvm-strip"
+        shell: bash
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p output/lib output/include output/share
+          cp src/libluajit*.a output/lib/ 2>/dev/null || true
+          cp src/luajit.h output/include/ 2>/dev/null || true
+          cp -r src/jit output/share/ 2>/dev/null || true
+          ls -R output
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luajit-${{ matrix.target }}
+          path: output/
+          if-no-files-found: warn
+
+  # ============================================================
+  # iOS build (interpreter only)
+  # JIT is disabled on iOS because regular iOS apps are not
+  # allowed to generate code at runtime. [citation:1]
+  # ============================================================
+  build-ios:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build LuaJIT for iOS
+        run: |
+          cd src
+          ISDKP=$(xcrun --sdk iphoneos --show-sdk-path)
+          ICC=$(xcrun --sdk iphoneos --find clang)
+          make DEFAULT_CC=clang CROSS="$(dirname $ICC)/" \
+               TARGET_FLAGS="-arch arm64 -isysroot $ISDKP" \
+               TARGET_SYS=iOS
+        shell: bash
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p output/lib output/include output/share
+          cp src/libluajit*.a output/lib/ 2>/dev/null || true
+          cp src/luajit.h output/include/ 2>/dev/null || true
+          cp -r src/jit output/share/ 2>/dev/null || true
+          ls -R output
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luajit-ios-arm64
+          path: output/
+          if-no-files-found: warn
+
+  # ============================================================
+  # Windows builds using MSVC
+  # Run msvcbuild.bat from a Native Tools Command Prompt
+  # for the appropriate target architecture. [citation:5]
+  # ============================================================
+  build-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win-x64
+            arch: x64
+          - target: win-x86
+            arch: x86
+
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: step-security/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+
+      - name: Build LuaJIT
+        run: |
+          cd src
+          .\msvcbuild.bat
+        shell: cmd
+
+      - name: Collect artifacts
+        run: |
+          mkdir output
+          mkdir output\bin output\lib output\include output\share
+          copy src\luajit.exe output\bin\ 2>nul || true
+          copy src\lua51.dll output\bin\ 2>nul || true
+          copy src\lua51.lib output\lib\ 2>nul || true
+          copy src\luajit.lib output\lib\ 2>nul || true
+          copy src\luajit.h output\include\ 2>nul || true
+          xcopy /E /I src\jit output\share\jit 2>nul || true
+          dir /S output
+        shell: cmd
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luajit-${{ matrix.target }}
+          path: output\
+          if-no-files-found: warn
