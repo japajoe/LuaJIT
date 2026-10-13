@@ -19,7 +19,7 @@ jobs:
           - os: ubuntu-latest
             target: linux-x64
             deployment_target: ""
-          - os: macos-13          # Intel runner
+          - os: macos-15          # Intel runner
             target: osx-x64
             deployment_target: "11.0"
           - os: macos-latest      # ARM runner
