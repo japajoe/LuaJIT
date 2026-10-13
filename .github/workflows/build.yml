@@ -7,7 +7,7 @@ on:
 
 jobs:
   # ============================================================
-  # Linux x64 native build
+  # Linux x64 native build (dynamic)
   # ============================================================
   build-linux-x64:
     runs-on: ubuntu-latest
@@ -18,13 +18,12 @@ jobs:
       - name: Build LuaJIT
         run: |
           cd src
-          make
+          make BUILDMODE=dynamic
         shell: bash
 
       - name: Collect artifacts
         run: |
-          mkdir -p output/bin output/lib output/include output/share
-          cp src/luajit output/bin/ 2>/dev/null || true
+          mkdir -p output/lib output/include output/share
           cp src/libluajit*.so* output/lib/ 2>/dev/null || true
           cp src/luajit.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
@@ -40,8 +39,6 @@ jobs:
   # ============================================================
   # macOS builds (Intel via macos-15-intel, ARM64 via macos-latest)
   # MACOSX_DEPLOYMENT_TARGET is required per the docs.
-  # macOS ARM64 runners may queue for a long time due to
-  # capacity constraints on GitHub's side.
   # ============================================================
   build-macos:
     strategy:
@@ -61,15 +58,22 @@ jobs:
       - name: Build LuaJIT
         run: |
           cd src
-          make TARGET_SYS=Darwin
+          make TARGET_SYS=Darwin BUILDMODE=dynamic
         shell: bash
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
 
+      - name: Fix dylib install name
+        run: |
+          cd src
+          DYLIB=$(ls libluajit*.dylib | head -1)
+          install_name_tool -id "@rpath/$DYLIB" "$DYLIB"
+          otool -D "$DYLIB" || true
+        shell: bash
+
       - name: Collect artifacts
         run: |
-          mkdir -p output/bin output/lib output/include output/share
-          cp src/luajit output/bin/ 2>/dev/null || true
+          mkdir -p output/lib output/include output/share
           cp src/libluajit*.dylib output/lib/ 2>/dev/null || true
           cp src/luajit.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
@@ -83,10 +87,7 @@ jobs:
           if-no-files-found: warn
 
   # ============================================================
-  # Linux ARM64 cross-compilation
-  # 32-bit ARM removed: gcc-multilib and gcc-arm-linux-gnueabihf
-  # cannot coexist on Ubuntu (bug #1300211), making the required
-  # HOST_CC="gcc -m32" impossible.
+  # Linux ARM64 cross-compilation (dynamic)
   # ============================================================
   build-linux-arm64:
     runs-on: ubuntu-latest
@@ -102,13 +103,13 @@ jobs:
       - name: Build LuaJIT
         run: |
           cd src
-          make CROSS=aarch64-linux-gnu-
+          make CROSS=aarch64-linux-gnu- BUILDMODE=dynamic
         shell: bash
 
       - name: Collect artifacts
         run: |
           mkdir -p output/lib output/include output/share
-          cp src/libluajit*.a output/lib/ 2>/dev/null || true
+          cp src/libluajit*.so* output/lib/ 2>/dev/null || true
           cp src/luajit.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
           ls -R output
@@ -121,10 +122,7 @@ jobs:
           if-no-files-found: warn
 
   # ============================================================
-  # Android ARM64 cross-compilation using NDK
-  # 32-bit Android ARM removed: LuaJIT requires matching pointer
-  # sizes (HOST_CC="gcc -m32"), which conflicts with the multilib
-  # requirement on Ubuntu. Modern NDK also removed GCC.
+  # Android ARM64 cross-compilation using NDK (dynamic)
   # ============================================================
   build-android-arm64:
     runs-on: ubuntu-latest
@@ -142,6 +140,7 @@ jobs:
           cd src
           NDKBIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           make \
+            BUILDMODE=dynamic \
             CROSS="$NDKBIN/aarch64-linux-android-" \
             STATIC_CC="$NDKBIN/aarch64-linux-android21-clang" \
             DYNAMIC_CC="$NDKBIN/aarch64-linux-android21-clang -fPIC" \
@@ -153,7 +152,7 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p output/lib output/include output/share
-          cp src/libluajit*.a output/lib/ 2>/dev/null || true
+          cp src/libluajit*.so* output/lib/ 2>/dev/null || true
           cp src/luajit.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
           ls -R output
@@ -166,7 +165,7 @@ jobs:
           if-no-files-found: warn
 
   # ============================================================
-  # iOS build (interpreter only)
+  # iOS build (interpreter only, dynamic)
   # JIT is disabled on iOS because regular iOS apps are not
   # allowed to generate code at runtime.
   # ============================================================
@@ -183,13 +182,23 @@ jobs:
           ICC=$(xcrun --sdk iphoneos --find clang)
           make DEFAULT_CC=clang CROSS="$(dirname $ICC)/" \
                TARGET_FLAGS="-arch arm64 -isysroot $ISDKP" \
-               TARGET_SYS=iOS
+               TARGET_SYS=iOS BUILDMODE=dynamic
+        shell: bash
+
+      - name: Fix dylib install name
+        run: |
+          cd src
+          DYLIB=$(ls libluajit*.dylib 2>/dev/null | head -1)
+          if [ -n "$DYLIB" ]; then
+            install_name_tool -id "@rpath/$DYLIB" "$DYLIB"
+            otool -D "$DYLIB" || true
+          fi
         shell: bash
 
       - name: Collect artifacts
         run: |
           mkdir -p output/lib output/include output/share
-          cp src/libluajit*.a output/lib/ 2>/dev/null || true
+          cp src/libluajit*.dylib output/lib/ 2>/dev/null || true
           cp src/luajit.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
           ls -R output
@@ -203,8 +212,7 @@ jobs:
 
   # ============================================================
   # Windows builds using MSVC
-  # Run msvcbuild.bat from a Native Tools Command Prompt
-  # for the appropriate target architecture.
+  # msvcbuild.bat already produces lua51.dll by default.
   # ============================================================
   build-windows:
     strategy:
@@ -236,10 +244,8 @@ jobs:
         run: |
           mkdir output
           mkdir output\bin output\lib output\include output\share
-          copy src\luajit.exe output\bin\ 2>nul || true
           copy src\lua51.dll output\bin\ 2>nul || true
           copy src\lua51.lib output\lib\ 2>nul || true
-          copy src\luajit.lib output\lib\ 2>nul || true
           copy src\luajit.h output\include\ 2>nul || true
           xcopy /E /I src\jit output\share\jit 2>nul || true
           dir /S output
