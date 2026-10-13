@@ -27,6 +27,7 @@ jobs:
           cp src/libluajit*.so* output/lib/ 2>/dev/null || true
           cp src/luajit.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
+          echo "--- Collected ---"
           ls -R output
         shell: bash
 
@@ -63,20 +64,39 @@ jobs:
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
 
-      - name: Fix dylib install name
+      - name: Inspect build output
         run: |
           cd src
-          DYLIB=$(ls libluajit*.dylib | head -1)
-          install_name_tool -id "@rpath/$DYLIB" "$DYLIB"
-          otool -D "$DYLIB" || true
+          echo "--- Files matching libluajit* ---"
+          ls -la libluajit* 2>/dev/null || echo "no libluajit* files"
+          echo "--- Files matching *.dylib or *.so ---"
+          find . -maxdepth 1 \( -name '*.dylib' -o -name '*.so' -o -name '*.so.*' \) -print
+        shell: bash
+
+      - name: Fix dylib install name (if a dylib exists)
+        run: |
+          cd src
+          shopt -s nullglob
+          dylibs=(libluajit*.dylib)
+          if [ ${#dylibs[@]} -eq 0 ]; then
+            echo "No .dylib found — skipping install_name_tool"
+            exit 0
+          fi
+          for dylib in "${dylibs[@]}"; do
+            echo "Fixing install name for: $dylib"
+            install_name_tool -id "@rpath/$dylib" "$dylib"
+            otool -D "$dylib" || true
+          done
         shell: bash
 
       - name: Collect artifacts
         run: |
           mkdir -p output/lib output/include output/share
           cp src/libluajit*.dylib output/lib/ 2>/dev/null || true
+          cp src/libluajit*.so*  output/lib/ 2>/dev/null || true
           cp src/luajit.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
+          echo "--- Collected ---"
           ls -R output
         shell: bash
 
@@ -112,6 +132,7 @@ jobs:
           cp src/libluajit*.so* output/lib/ 2>/dev/null || true
           cp src/luajit.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
+          echo "--- Collected ---"
           ls -R output
         shell: bash
 
@@ -155,6 +176,7 @@ jobs:
           cp src/libluajit*.so* output/lib/ 2>/dev/null || true
           cp src/luajit.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
+          echo "--- Collected ---"
           ls -R output
         shell: bash
 
@@ -185,22 +207,39 @@ jobs:
                TARGET_SYS=iOS BUILDMODE=dynamic
         shell: bash
 
-      - name: Fix dylib install name
+      - name: Inspect build output
         run: |
           cd src
-          DYLIB=$(ls libluajit*.dylib 2>/dev/null | head -1)
-          if [ -n "$DYLIB" ]; then
-            install_name_tool -id "@rpath/$DYLIB" "$DYLIB"
-            otool -D "$DYLIB" || true
+          echo "--- Files matching libluajit* ---"
+          ls -la libluajit* 2>/dev/null || echo "no libluajit* files"
+          echo "--- Files matching *.dylib or *.so ---"
+          find . -maxdepth 1 \( -name '*.dylib' -o -name '*.so' -o -name '*.so.*' \) -print
+        shell: bash
+
+      - name: Fix dylib install name (if a dylib exists)
+        run: |
+          cd src
+          shopt -s nullglob
+          dylibs=(libluajit*.dylib)
+          if [ ${#dylibs[@]} -eq 0 ]; then
+            echo "No .dylib found — skipping install_name_tool"
+            exit 0
           fi
+          for dylib in "${dylibs[@]}"; do
+            echo "Fixing install name for: $dylib"
+            install_name_tool -id "@rpath/$dylib" "$dylib"
+            otool -D "$dylib" || true
+          done
         shell: bash
 
       - name: Collect artifacts
         run: |
           mkdir -p output/lib output/include output/share
           cp src/libluajit*.dylib output/lib/ 2>/dev/null || true
+          cp src/libluajit*.so*  output/lib/ 2>/dev/null || true
           cp src/luajit.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
+          echo "--- Collected ---"
           ls -R output
         shell: bash
 
