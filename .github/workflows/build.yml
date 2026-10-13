@@ -15,17 +15,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build LuaJIT
+      - name: Build and install LuaJIT
         run: |
           cd src
           make BUILDMODE=dynamic
+          make install PREFIX="$GITHUB_WORKSPACE/install" BUILDMODE=dynamic
         shell: bash
 
       - name: Collect artifacts
         run: |
           mkdir -p output/lib output/include output/share
-          cp src/libluajit*.so* output/lib/ 2>/dev/null || true
-          cp src/luajit.h output/include/ 2>/dev/null || true
+          cp install/lib/libluajit*.so* output/lib/ 2>/dev/null || true
+          cp install/include/luajit*.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
           echo "--- Collected ---"
           ls -R output
@@ -40,6 +41,7 @@ jobs:
   # ============================================================
   # macOS builds (Intel via macos-15-intel, ARM64 via macos-latest)
   # MACOSX_DEPLOYMENT_TARGET is required per the docs.
+  # The .dylib is produced by `make install`, not by plain `make`.
   # ============================================================
   build-macos:
     strategy:
@@ -56,45 +58,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build LuaJIT
+      - name: Build and install LuaJIT
         run: |
           cd src
           make TARGET_SYS=Darwin BUILDMODE=dynamic
+          make install PREFIX="$GITHUB_WORKSPACE/install" TARGET_SYS=Darwin BUILDMODE=dynamic
         shell: bash
         env:
           MACOSX_DEPLOYMENT_TARGET: "11.0"
 
-      - name: Inspect build output
+      - name: Inspect installed output
         run: |
-          cd src
-          echo "--- Files matching libluajit* ---"
-          ls -la libluajit* 2>/dev/null || echo "no libluajit* files"
-          echo "--- Files matching *.dylib or *.so ---"
-          find . -maxdepth 1 \( -name '*.dylib' -o -name '*.so' -o -name '*.so.*' \) -print
+          echo "--- install/lib ---"
+          ls -la install/lib 2>/dev/null || echo "install/lib not found"
+          echo "--- install/include ---"
+          ls -la install/include 2>/dev/null || echo "install/include not found"
+          echo "--- file types ---"
+          for f in install/lib/*; do
+            [ -f "$f" ] && file "$f"
+          done
         shell: bash
 
-      - name: Fix dylib install name (if a dylib exists)
+      - name: Fix dylib install name
         run: |
-          cd src
           shopt -s nullglob
-          dylibs=(libluajit*.dylib)
+          dylibs=(install/lib/libluajit*.dylib)
           if [ ${#dylibs[@]} -eq 0 ]; then
-            echo "No .dylib found — skipping install_name_tool"
+            echo "No .dylib found in install/lib"
             exit 0
           fi
           for dylib in "${dylibs[@]}"; do
             echo "Fixing install name for: $dylib"
-            install_name_tool -id "@rpath/$dylib" "$dylib"
+            install_name_tool -id "@rpath/$(basename "$dylib")" "$dylib"
             otool -D "$dylib" || true
+            otool -hv "$dylib" | head -5 || true
           done
         shell: bash
 
       - name: Collect artifacts
         run: |
           mkdir -p output/lib output/include output/share
-          cp src/libluajit*.dylib output/lib/ 2>/dev/null || true
-          cp src/libluajit*.so*  output/lib/ 2>/dev/null || true
-          cp src/luajit.h output/include/ 2>/dev/null || true
+          cp install/lib/libluajit*.dylib output/lib/ 2>/dev/null || true
+          cp install/include/luajit*.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
           echo "--- Collected ---"
           ls -R output
@@ -120,17 +125,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Build LuaJIT
+      - name: Build and install LuaJIT
         run: |
           cd src
           make CROSS=aarch64-linux-gnu- BUILDMODE=dynamic
+          make install PREFIX="$GITHUB_WORKSPACE/install" CROSS=aarch64-linux-gnu- BUILDMODE=dynamic
         shell: bash
 
       - name: Collect artifacts
         run: |
           mkdir -p output/lib output/include output/share
-          cp src/libluajit*.so* output/lib/ 2>/dev/null || true
-          cp src/luajit.h output/include/ 2>/dev/null || true
+          cp install/lib/libluajit*.so* output/lib/ 2>/dev/null || true
+          cp install/include/luajit*.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
           echo "--- Collected ---"
           ls -R output
@@ -156,11 +162,19 @@ jobs:
         with:
           ndk-version: r25b
 
-      - name: Build LuaJIT for Android ARM64
+      - name: Build and install LuaJIT for Android ARM64
         run: |
           cd src
           NDKBIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           make \
+            BUILDMODE=dynamic \
+            CROSS="$NDKBIN/aarch64-linux-android-" \
+            STATIC_CC="$NDKBIN/aarch64-linux-android21-clang" \
+            DYNAMIC_CC="$NDKBIN/aarch64-linux-android21-clang -fPIC" \
+            TARGET_LD="$NDKBIN/aarch64-linux-android21-clang" \
+            TARGET_AR="$NDKBIN/llvm-ar rcus" \
+            TARGET_STRIP="$NDKBIN/llvm-strip"
+          make install PREFIX="$GITHUB_WORKSPACE/install" \
             BUILDMODE=dynamic \
             CROSS="$NDKBIN/aarch64-linux-android-" \
             STATIC_CC="$NDKBIN/aarch64-linux-android21-clang" \
@@ -173,8 +187,8 @@ jobs:
       - name: Collect artifacts
         run: |
           mkdir -p output/lib output/include output/share
-          cp src/libluajit*.so* output/lib/ 2>/dev/null || true
-          cp src/luajit.h output/include/ 2>/dev/null || true
+          cp install/lib/libluajit*.so* output/lib/ 2>/dev/null || true
+          cp install/include/luajit*.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
           echo "--- Collected ---"
           ls -R output
@@ -190,6 +204,8 @@ jobs:
   # iOS build (interpreter only, dynamic)
   # JIT is disabled on iOS because regular iOS apps are not
   # allowed to generate code at runtime.
+  # The install step for iOS uses a different layout, so we
+  # rename the .so to .dylib manually after building.
   # ============================================================
   build-ios:
     runs-on: macos-latest
@@ -212,22 +228,39 @@ jobs:
           cd src
           echo "--- Files matching libluajit* ---"
           ls -la libluajit* 2>/dev/null || echo "no libluajit* files"
-          echo "--- Files matching *.dylib or *.so ---"
-          find . -maxdepth 1 \( -name '*.dylib' -o -name '*.so' -o -name '*.so.*' \) -print
+          for f in libluajit*; do
+            [ -f "$f" ] && file "$f"
+          done
         shell: bash
 
-      - name: Fix dylib install name (if a dylib exists)
+      - name: Rename .so to .dylib if needed
+        run: |
+          cd src
+          shopt -s nullglob
+          sos=(libluajit*.so)
+          if [ ${#sos[@]} -eq 0 ]; then
+            echo "No .so found — nothing to rename"
+            exit 0
+          fi
+          for so in "${sos[@]}"; do
+            base="${so%.so}"
+            echo "Renaming $so -> ${base}.dylib"
+            mv "$so" "${base}.dylib"
+          done
+        shell: bash
+
+      - name: Fix dylib install name
         run: |
           cd src
           shopt -s nullglob
           dylibs=(libluajit*.dylib)
           if [ ${#dylibs[@]} -eq 0 ]; then
-            echo "No .dylib found — skipping install_name_tool"
+            echo "No .dylib found"
             exit 0
           fi
           for dylib in "${dylibs[@]}"; do
             echo "Fixing install name for: $dylib"
-            install_name_tool -id "@rpath/$dylib" "$dylib"
+            install_name_tool -id "@rpath/$dylib" "$dylib" || true
             otool -D "$dylib" || true
           done
         shell: bash
@@ -236,7 +269,6 @@ jobs:
         run: |
           mkdir -p output/lib output/include output/share
           cp src/libluajit*.dylib output/lib/ 2>/dev/null || true
-          cp src/libluajit*.so*  output/lib/ 2>/dev/null || true
           cp src/luajit.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
           echo "--- Collected ---"
