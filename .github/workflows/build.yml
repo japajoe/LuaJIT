@@ -7,26 +7,10 @@ on:
 
 jobs:
   # ============================================================
-  # POSIX native builds (Linux x64, macOS x64/arm64)
-  # macOS requires MACOSX_DEPLOYMENT_TARGET per the docs:
-  #   MACOSX_DEPLOYMENT_TARGET=XX.YY make
+  # Linux x64 native build
   # ============================================================
-  build-posix-native:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: linux-x64
-            deployment_target: ""
-          - os: macos-15          # Intel runner
-            target: osx-x64
-            deployment_target: "11.0"
-          - os: macos-latest      # ARM runner
-            target: osx-arm64
-            deployment_target: "11.0"
-
-    runs-on: ${{ matrix.os }}
+  build-linux-x64:
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -36,14 +20,56 @@ jobs:
           cd src
           make
         shell: bash
-        env:
-          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
 
       - name: Collect artifacts
         run: |
           mkdir -p output/bin output/lib output/include output/share
           cp src/luajit output/bin/ 2>/dev/null || true
           cp src/libluajit*.so* output/lib/ 2>/dev/null || true
+          cp src/luajit.h output/include/ 2>/dev/null || true
+          cp -r src/jit output/share/ 2>/dev/null || true
+          ls -R output
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luajit-linux-x64
+          path: output/
+          if-no-files-found: warn
+
+  # ============================================================
+  # macOS builds (Intel via macos-15-intel, ARM64 via macos-latest)
+  # MACOSX_DEPLOYMENT_TARGET is required per the docs.
+  # macOS ARM64 runners may queue for a long time due to
+  # capacity constraints on GitHub's side.
+  # ============================================================
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel   # Intel runner
+            target: osx-x64
+          - os: macos-latest     # ARM64 runner
+            target: osx-arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build LuaJIT
+        run: |
+          cd src
+          make TARGET_SYS=Darwin
+        shell: bash
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p output/bin output/lib output/include output/share
+          cp src/luajit output/bin/ 2>/dev/null || true
           cp src/libluajit*.dylib output/lib/ 2>/dev/null || true
           cp src/luajit.h output/include/ 2>/dev/null || true
           cp -r src/jit output/share/ 2>/dev/null || true
@@ -57,24 +83,12 @@ jobs:
           if-no-files-found: warn
 
   # ============================================================
-  # Linux ARM cross-compilation
-  # Requires HOST_CC to match target pointer size.
-  # For 32-bit ARM: HOST_CC="gcc -m32"
+  # Linux ARM64 cross-compilation
+  # 32-bit ARM removed: gcc-multilib and gcc-arm-linux-gnueabihf
+  # cannot coexist on Ubuntu (bug #1300211), making the required
+  # HOST_CC="gcc -m32" impossible.
   # ============================================================
-  build-linux-arm:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: linux-arm64
-            cross: aarch64-linux-gnu-
-            host_cc: gcc
-            packages: gcc-aarch64-linux-gnu
-          - target: linux-arm
-            cross: arm-linux-gnueabihf-
-            host_cc: "gcc -m32"
-            packages: "gcc-arm-linux-gnueabihf gcc-multilib"
-
+  build-linux-arm64:
     runs-on: ubuntu-latest
 
     steps:
@@ -83,12 +97,12 @@ jobs:
       - name: Install cross-compiler
         run: |
           sudo apt-get update
-          sudo apt-get install -y ${{ matrix.packages }}
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build LuaJIT
         run: |
           cd src
-          make HOST_CC="${{ matrix.host_cc }}" CROSS=${{ matrix.cross }}
+          make CROSS=aarch64-linux-gnu-
         shell: bash
 
       - name: Collect artifacts
@@ -102,25 +116,17 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: luajit-${{ matrix.target }}
+          name: luajit-linux-arm64
           path: output/
           if-no-files-found: warn
 
   # ============================================================
-  # Android cross-compilation using NDK
+  # Android ARM64 cross-compilation using NDK
+  # 32-bit Android ARM removed: LuaJIT requires matching pointer
+  # sizes (HOST_CC="gcc -m32"), which conflicts with the multilib
+  # requirement on Ubuntu. Modern NDK also removed GCC.
   # ============================================================
-  build-android:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: android-arm64
-            ndk_cross: aarch64-linux-android-
-            ndk_cc: aarch64-linux-android21-clang
-          - target: android-arm
-            ndk_cross: arm-linux-androideabi-
-            ndk_cc: armv7a-linux-androideabi21-clang
-
+  build-android-arm64:
     runs-on: ubuntu-latest
 
     steps:
@@ -131,15 +137,15 @@ jobs:
         with:
           ndk-version: r25b
 
-      - name: Build LuaJIT for Android
+      - name: Build LuaJIT for Android ARM64
         run: |
           cd src
           NDKBIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           make \
-            CROSS="$NDKBIN/${{ matrix.ndk_cross }}" \
-            STATIC_CC="$NDKBIN/${{ matrix.ndk_cc }}" \
-            DYNAMIC_CC="$NDKBIN/${{ matrix.ndk_cc }} -fPIC" \
-            TARGET_LD="$NDKBIN/${{ matrix.ndk_cc }}" \
+            CROSS="$NDKBIN/aarch64-linux-android-" \
+            STATIC_CC="$NDKBIN/aarch64-linux-android21-clang" \
+            DYNAMIC_CC="$NDKBIN/aarch64-linux-android21-clang -fPIC" \
+            TARGET_LD="$NDKBIN/aarch64-linux-android21-clang" \
             TARGET_AR="$NDKBIN/llvm-ar rcus" \
             TARGET_STRIP="$NDKBIN/llvm-strip"
         shell: bash
@@ -155,7 +161,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: luajit-${{ matrix.target }}
+          name: luajit-android-arm64
           path: output/
           if-no-files-found: warn
 
